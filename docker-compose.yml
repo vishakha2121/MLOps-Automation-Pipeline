@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: mlops_postgres
+    environment:
+      POSTGRES_USER: mlops_user
+      POSTGRES_PASSWORD: mlops_password
+      POSTGRES_DB: mlops_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mlops_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlops_user -d mlops_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mlops_backend
+    environment:
+      DATABASE_URL: postgresql://mlops_user:mlops_password@db:5432/mlops_db
+      MLFLOW_TRACKING_URI: ./mlruns
+      MODEL_URI: ./models
+      DRIFT_THRESHOLD: 0.1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./backend/mlruns:/app/mlruns
+      - ./backend/models:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - mlops_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # MLflow Tracking Server
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.4.1
+    container_name: mlops_mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/mlruns:/mlruns
+    networks:
+      - mlops_network
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri /mlruns --default-artifact-root /mlruns
+
+  # Frontend React App
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mlops_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - mlops_network
+    command: npm run dev -- --host
+
+  # Optional: PGAdmin for DB Management (Uncomment if needed)
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   container_name: mlops_pgadmin
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: admin@admin.com
+  #     PGADMIN_DEFAULT_PASSWORD: admin
+  #   ports:
+  #     - "5050:80"
+  #   depends_on:
+  #     - db
+  #   networks:
+  #     - mlops_network
+
+volumes:
+  postgres_data:
+
+networks:
+  mlops_network:
+    driver: bridge
